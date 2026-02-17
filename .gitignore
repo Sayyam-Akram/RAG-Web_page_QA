@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+temp_files/
+node_modules/
+frontend/dist/
+backend/threads/
