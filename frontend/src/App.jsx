@@ -1,5 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import ChatMessage from './components/ChatMessage'
+import Sidebar from './components/Sidebar'
+import Dashboard from './components/Dashboard'
+import SettingsModal from './components/SettingsModal'
+import { Send, Paperclip, Link2, Sun, Moon } from 'lucide-react'
 import './App.css'
 
 const API = '/api'
@@ -11,11 +15,23 @@ export default function App() {
     const [input, setInput] = useState('')
     const [loading, setLoading] = useState(false)
     const [status, setStatus] = useState({ ready: false, sources: [] })
-    const [drawer, setDrawer] = useState(false)
     const [sourceMode, setSourceMode] = useState('url')
     const [urls, setUrls] = useState('')
     const [files, setFiles] = useState([])
     const [toast, setToast] = useState(null)
+    const [showSources, setShowSources] = useState(false) // Default closed
+    const [activeSources, setActiveSources] = useState([])
+    const [currentView, setCurrentView] = useState('dashboard') // 'dashboard' | 'chat'
+    const [theme, setTheme] = useState('dark')
+
+    // Expert Settings State
+    const [showSettings, setShowSettings] = useState(false)
+    const [settings, setSettings] = useState({
+        top_k: 5,
+        temperature: 0.3,
+        hybrid_search: true
+    })
+
     const bottomRef = useRef(null)
     const fileRef = useRef()
 
@@ -23,8 +39,23 @@ export default function App() {
 
     useEffect(() => {
         fetch(`${API}/threads`).then(r => r.json()).then(d => setThreads(d.threads || [])).catch(() => { })
-        fetch(`${API}/status`).then(r => r.json()).then(setStatus).catch(() => { })
+        fetch(`${API}/status`).then(r => r.json()).then(d => {
+            setStatus(d)
+            if (d.sources) setActiveSources(d.sources.map(s => s.title))
+        }).catch(() => { })
+
+        // Load theme from local storage or default
+        const savedTheme = localStorage.getItem('theme') || 'dark'
+        setTheme(savedTheme)
+        document.documentElement.setAttribute('data-theme', savedTheme)
     }, [])
+
+    const toggleTheme = () => {
+        const newTheme = theme === 'dark' ? 'light' : 'dark'
+        setTheme(newTheme)
+        localStorage.setItem('theme', newTheme)
+        document.documentElement.setAttribute('data-theme', newTheme)
+    }
 
     const refreshThreads = useCallback(async () => {
         const r = await fetch(`${API}/threads`)
@@ -34,15 +65,20 @@ export default function App() {
 
     const loadThread = useCallback(async (id) => {
         setActiveThread(id)
+        setCurrentView('chat')
         const r = await fetch(`${API}/threads/${id}`)
         const d = await r.json()
         if (d.ok) setMessages(d.thread.messages || [])
     }, [])
 
-    const startNewChat = () => { setActiveThread(null); setMessages([]) }
+    const startNewChat = () => {
+        setActiveThread(null)
+        setMessages([])
+        setCurrentView('chat')
+    }
 
     const deleteThread = async (id, e) => {
-        e.stopPropagation()
+        // e.stopPropagation() is handled in Sidebar
         await fetch(`${API}/threads/${id}`, { method: 'DELETE' })
         if (activeThread === id) startNewChat()
         refreshThreads()
@@ -65,6 +101,9 @@ export default function App() {
             if (data.ok) {
                 setToast({ type: 'success', text: `Loaded ${data.loaded} chunks from ${data.sources?.length || 0} source(s)` })
                 setStatus({ ready: true, sources: data.sources || [] })
+                // Load newly created sources into active filtering
+                const newTitles = data.sources.map(s => s.title)
+                setActiveSources(prev => [...new Set([...prev, ...newTitles])])
                 setFiles([])
             } else {
                 setToast({ type: 'error', text: data.errors?.join(', ') || 'Failed to load sources.' })
@@ -80,192 +119,222 @@ export default function App() {
         setInput('')
         setMessages(prev => [...prev, { role: 'user', content: q }])
         setLoading(true)
+
         try {
-            const res = await fetch(`${API}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q, thread_id: activeThread }) })
-            const data = await res.json()
-            if (data.ok) {
-                setMessages(prev => [...prev, { role: 'assistant', content: data.answer, sources: data.sources, in_kb: data.in_kb }])
-                if (!activeThread) setActiveThread(data.thread_id)
-                refreshThreads()
-            } else {
-                setMessages(prev => [...prev, { role: 'assistant', content: data.error || 'Something went wrong.', sources: [], in_kb: true }])
+            const res = await fetch(`${API}/chat-stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    question: q,
+                    thread_id: activeThread,
+                    active_sources: activeSources,
+                    // Pass settings
+                    top_k: settings.top_k,
+                    hybrid_search: settings.hybrid_search,
+                    temperature: settings.temperature
+                })
+            })
+
+            const reader = res.body.getReader()
+            const decoder = new TextDecoder()
+
+            setMessages(prev => [...prev, { role: 'assistant', content: '', sources: [], in_kb: true }])
+
+            let buffer = ''
+            let isFirstBlock = true
+
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+
+                const chunk = decoder.decode(value, { stream: true })
+
+                if (isFirstBlock) {
+                    buffer += chunk
+                    const newlineIndex = buffer.indexOf('\n')
+                    if (newlineIndex !== -1) {
+                        const jsonLine = buffer.slice(0, newlineIndex)
+                        try {
+                            const data = JSON.parse(jsonLine)
+                            if (data.error) {
+                                setMessages(prev => {
+                                    const last = prev[prev.length - 1]
+                                    return [...prev.slice(0, -1), { ...last, content: data.error }]
+                                })
+                                break
+                            }
+                            if (data.thread_id && !activeThread) setActiveThread(data.thread_id)
+                            setMessages(prev => {
+                                const last = prev[prev.length - 1]
+                                return [...prev.slice(0, -1), {
+                                    ...last,
+                                    sources: data.sources || [],
+                                    in_kb: data.in_kb
+                                }]
+                            })
+                            const remaining = buffer.slice(newlineIndex + 1)
+                            buffer = ''
+                            isFirstBlock = false
+                            if (remaining) {
+                                setMessages(prev => {
+                                    const last = prev[prev.length - 1]
+                                    return [...prev.slice(0, -1), { ...last, content: last.content + remaining }]
+                                })
+                            }
+                        } catch (e) { console.error("JSON parse error", e) }
+                    }
+                } else {
+                    setMessages(prev => {
+                        const last = prev[prev.length - 1]
+                        return [...prev.slice(0, -1), { ...last, content: last.content + chunk }]
+                    })
+                }
             }
-        } catch {
+            refreshThreads()
+        } catch (e) {
             setMessages(prev => [...prev, { role: 'assistant', content: '❌ Could not reach the server.', sources: [], in_kb: true }])
         } finally { setLoading(false) }
     }
 
     return (
         <div className="app">
-            {/* ─── LEFT SIDEBAR ─── */}
-            <aside className="sidebar">
-                <div className="sidebar-header">
-                    <div className="logo">⚡</div>
-                    <span className="brand">Knowledge Lab</span>
-                    <span className="badge">RAG</span>
-                </div>
+            <Sidebar
+                currentView={currentView}
+                setCurrentView={setCurrentView}
+                threads={threads}
+                activeThread={activeThread}
+                onLoadThread={loadThread}
+                onDeleteThread={deleteThread}
+                onNewChat={startNewChat}
+                onToggleSources={() => setShowSources(!showSources)}
+                onOpenSettings={() => setShowSettings(true)}
+            />
 
-                <button className="new-chat-btn" onClick={startNewChat}>
-                    <span className="icon-plus">+</span> New Thread
-                </button>
+            {/* Main Area */}
+            <main className="main-area">
 
-                <div className="thread-section-label">Recent</div>
-                <div className="thread-list">
-                    {threads.map(t => (
-                        <div key={t.id} className={`thread-item ${activeThread === t.id ? 'active' : ''}`} onClick={() => loadThread(t.id)}>
-                            <span className="thread-icon">💬</span>
-                            <div className="thread-info">
-                                <div className="thread-title">{t.title}</div>
-                                <div className="thread-meta">{t.message_count} messages</div>
-                            </div>
-                            <button className="thread-delete" onClick={e => deleteThread(t.id, e)}>✕</button>
-                        </div>
-                    ))}
-                    {threads.length === 0 && <div className="empty-threads">No threads yet — start a conversation</div>}
-                </div>
-
-                <div className="sidebar-footer">
-                    <button className="source-toggle-btn" onClick={() => setDrawer(!drawer)}>
-                        <span className={`dot ${status.ready ? 'active' : 'inactive'}`} />
-                        {status.ready ? `${status.sources?.length || 0} Source(s)` : 'Add Sources'}
+                {/* Top Bar for Theme Toggle (Floating or Fixed) */}
+                <div style={{ position: 'absolute', top: '1rem', right: '1.5rem', zIndex: 50 }}>
+                    <button onClick={toggleTheme} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', padding: '0.5rem', borderRadius: '50%', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex' }}>
+                        {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
                     </button>
+                </div>
+
+                {currentView === 'dashboard' ? (
+                    <Dashboard
+                        status={status}
+                        threads={threads}
+                        activeSources={activeSources}
+                        setActiveSources={setActiveSources}
+                        setSourceMode={(mode) => { setSourceMode(mode); setCurrentView('chat'); setShowSources(true); }}
+                        setCurrentView={setCurrentView}
+                        loadThread={loadThread}
+                    />
+                ) : (
+                    <>
+                        <div className="status-strip">
+                            <span className={`status-dot ${status.ready ? 'on' : 'off'}`} />
+                            <span>{status.ready ? `Ready — ${status.sources?.length || 0} source(s) indexed` : 'No sources loaded'}</span>
+                            <button className="toggle-sources-btn" onClick={() => setShowSources(!showSources)} title="Toggle Source Manager">
+                                {showSources ? 'Hide Sources ▸' : '◂ Show Sources'}
+                            </button>
+                        </div>
+
+                        <div className="chat-viewport">
+                            {messages.length === 0 && (
+                                <div className="welcome-screen">
+                                    <div className="welcome-icon">
+                                        <img src="/logo.png" alt="Logo" className="welcome-bot-img" onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
+                                        <div className="welcome-bot-fallback" style={{ display: 'none' }}>⚡</div>
+                                    </div>
+                                    <h1>CiteFlow</h1>
+                                    <div className="brand-sub" style={{ fontSize: '0.8rem', marginBottom: '1rem' }}>RESEARCH OS</div>
+                                    <p className="subtitle">
+                                        Your AI research assistant. Feed it documents or URLs, then ask precise questions — every answer is grounded in your sources.
+                                    </p>
+                                    <div className="chip-grid">
+                                        <button className="suggestion-chip" onClick={() => { setSourceMode('file'); setShowSources(true) }}>📄 Upload PDF</button>
+                                        <button className="suggestion-chip" onClick={() => { setSourceMode('url'); setShowSources(true) }}>🔗 Analyze URL</button>
+                                    </div>
+                                </div>
+                            )}
+                            {messages.map((msg, i) => <ChatMessage key={i} msg={msg} />)}
+                            {loading && <div className="msg-row assistant"><div className="msg-inner"><div className="typing-dots"><span /><span /><span /></div></div></div>}
+                            <div ref={bottomRef} />
+                        </div>
+
+                        <div className="input-dock">
+                            <div className="input-pill">
+                                <button className="pill-btn" onClick={() => { setSourceMode('file'); setShowSources(true) }}><Paperclip size={18} /></button>
+                                <button className="pill-btn" onClick={() => { setSourceMode('url'); setShowSources(true) }}><Link2 size={18} /></button>
+                                <input
+                                    placeholder={status.ready ? 'Ask your knowledge base…' : 'Load sources first…'}
+                                    value={input}
+                                    onChange={e => setInput(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+                                    disabled={!status.ready || loading}
+                                />
+                                <button className="pill-send" onClick={() => send()} disabled={!status.ready || loading || !input.trim()}><Send size={18} /></button>
+                            </div>
+                        </div>
+                    </>
+                )}
+            </main>
+
+            {/* Right Panel: Source Manager (Only in Chat view or always? Sliding in) */}
+            <aside className={`source-manager ${showSources ? '' : 'collapsed'}`}>
+                <div className="sm-header">
+                    <h3>Source Manager</h3>
+                    <button onClick={() => setShowSources(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>✕</button>
+                </div>
+                <div className="sm-body">
+                    <div className="mode-toggle">
+                        <button className={`mode-btn ${sourceMode === 'url' ? 'active' : ''}`} onClick={() => setSourceMode('url')}>URLS</button>
+                        <button className={`mode-btn ${sourceMode === 'file' ? 'active' : ''}`} onClick={() => setSourceMode('file')}>FILES</button>
+                    </div>
+
+                    {sourceMode === 'url' ? (
+                        <div className="sm-section">
+                            <label className="sm-label">Ingest URLs</label>
+                            <textarea className="url-textarea" placeholder={'Enter one URL per line…'} value={urls} onChange={e => setUrls(e.target.value)} />
+                        </div>
+                    ) : (
+                        <div className="sm-section">
+                            <label className="sm-label">Upload Files</label>
+                            <div className="drop-zone" onClick={() => fileRef.current?.click()}>
+                                <input ref={fileRef} type="file" multiple accept=".pdf,.docx,.txt" onChange={e => setFiles(prev => [...prev, ...Array.from(e.target.files)])} />
+                                <div className="drop-icon">📁</div>
+                                <div className="drop-text">Drop files</div>
+                            </div>
+                            {files.length > 0 && <div className="file-chips">{files.map((f, i) => <span key={i} className="file-chip">{f.name}</span>)}</div>}
+                        </div>
+                    )}
+                    <button className="btn-process" onClick={handleProcess} disabled={loading}>PROCESS SOURCES</button>
+
+                    {toast && <div className={`sm-toast ${toast.type}`}><div>{toast.text}</div></div>}
+
+                    {status.sources?.length > 0 && (
+                        <div className="loaded-sources">
+                            <div className="sm-label">Indexed Sources</div>
+                            {status.sources.map((s, i) => (
+                                <div key={i} className="source-row">
+                                    <input type="checkbox" checked={activeSources.includes(s.title)} onChange={e => { if (e.target.checked) setActiveSources(p => [...p, s.title]); else setActiveSources(p => p.filter(t => t !== s.title)) }} />
+                                    <span className="source-tag">{s.title}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             </aside>
 
-            {/* ─── MAIN AREA ─── */}
-            <main className="main-area">
-                <div className="status-strip">
-                    <span className={`status-dot ${status.ready ? 'on' : 'off'}`} />
-                    <span>{status.ready ? `Ready — ${status.sources?.length || 0} source(s) indexed` : 'No sources loaded — add documents to begin'}</span>
-                </div>
-
-                <div className="chat-viewport">
-                    {messages.length === 0 && (
-                        <div className="welcome-screen">
-                            <div className="welcome-icon">🔬</div>
-                            <h1>Knowledge Lab</h1>
-                            <p className="subtitle">
-                                Your AI research assistant. Feed it documents or URLs, then ask precise questions — every answer is grounded in your sources.
-                            </p>
-
-                            <div className="feature-grid">
-                                <div className="feature-card">
-                                    <div className="card-icon indigo">📎</div>
-                                    <div className="card-title">Source Citations</div>
-                                    <div className="card-desc">Every claim traced back to its origin document</div>
-                                </div>
-                                <div className="feature-card">
-                                    <div className="card-icon teal">🧠</div>
-                                    <div className="card-title">Thread Memory</div>
-                                    <div className="card-desc">Follow-up questions understand prior context</div>
-                                </div>
-                                <div className="feature-card">
-                                    <div className="card-icon rose">🛡️</div>
-                                    <div className="card-title">Hallucination Guard</div>
-                                    <div className="card-desc">Tells you when the answer isn't in the KB</div>
-                                </div>
-                            </div>
-
-                            <div className="quick-start">
-                                <div className="qs-label">Quick Start</div>
-                                <div className="chip-grid">
-                                    <button className="suggestion-chip" onClick={() => { setDrawer(true) }}>
-                                        <span className="chip-emoji">📄</span> Upload a PDF
-                                    </button>
-                                    <button className="suggestion-chip" onClick={() => { setDrawer(true); setSourceMode('url') }}>
-                                        <span className="chip-emoji">🌐</span> Analyze a URL
-                                    </button>
-                                    <button className="suggestion-chip" onClick={() => send('What sources are loaded?')} disabled={!status.ready}>
-                                        <span className="chip-emoji">📚</span> What's in my KB?
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {messages.map((msg, i) => <ChatMessage key={i} msg={msg} />)}
-
-                    {loading && (
-                        <div className="msg-row assistant">
-                            <div className="msg-inner">
-                                <div className="msg-avatar">🔬</div>
-                                <div className="msg-body">
-                                    <div className="msg-role">Assistant</div>
-                                    <div className="typing-dots"><span /><span /><span /></div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                    <div ref={bottomRef} />
-                </div>
-
-                {/* ─── FLOATING INPUT ─── */}
-                <div className="input-dock">
-                    <div className="input-pill">
-                        <input
-                            placeholder={status.ready ? 'Ask anything about your documents…' : 'Load sources first…'}
-                            value={input}
-                            onChange={e => setInput(e.target.value)}
-                            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-                            disabled={!status.ready || loading}
-                        />
-                        <button className="pill-btn" title="Upload file" onClick={() => { setDrawer(true); setSourceMode('file') }}>📎</button>
-                        <button className="pill-btn" title="Add URL" onClick={() => { setDrawer(true); setSourceMode('url') }}>🔗</button>
-                        <button className="pill-send" onClick={() => send()} disabled={!status.ready || loading || !input.trim()} title="Send">➤</button>
-                    </div>
-                </div>
-
-                {/* ─── RIGHT DRAWER ─── */}
-                {drawer && (
-                    <div className="right-drawer">
-                        <div className="drawer-header">
-                            <h3>Source Manager</h3>
-                            <button className="drawer-close" onClick={() => setDrawer(false)}>✕</button>
-                        </div>
-                        <div className="drawer-body">
-                            <div className="mode-toggle">
-                                <button className={`mode-btn ${sourceMode === 'url' ? 'active' : ''}`} onClick={() => setSourceMode('url')}>🌐 URLs</button>
-                                <button className={`mode-btn ${sourceMode === 'file' ? 'active' : ''}`} onClick={() => setSourceMode('file')}>📄 Files</button>
-                            </div>
-
-                            {sourceMode === 'url' ? (
-                                <textarea className="url-textarea" placeholder={'Paste URLs, one per line:\nhttps://docs.example.com/guide'} value={urls} onChange={e => setUrls(e.target.value)} />
-                            ) : (
-                                <>
-                                    <div className="drop-zone" onClick={() => fileRef.current?.click()}>
-                                        <input ref={fileRef} type="file" multiple accept=".pdf,.docx,.txt" onChange={e => setFiles(prev => [...prev, ...Array.from(e.target.files)])} />
-                                        <div className="drop-icon">📁</div>
-                                        <div className="drop-text">Drop files or click to browse</div>
-                                        <div className="drop-formats">PDF · DOCX · TXT</div>
-                                    </div>
-                                    {files.length > 0 && (
-                                        <div className="file-chips">
-                                            {files.map((f, i) => (
-                                                <span key={i} className="file-chip">📄 {f.name} <button className="remove" onClick={() => setFiles(p => p.filter((_, j) => j !== i))}>✕</button></span>
-                                            ))}
-                                        </div>
-                                    )}
-                                </>
-                            )}
-
-                            <div className="drawer-actions">
-                                <button className="btn-process" onClick={handleProcess} disabled={loading}>🚀 Process Sources</button>
-                            </div>
-
-                            {status.sources?.length > 0 && (
-                                <div className="loaded-sources">
-                                    <div className="label">Indexed Sources</div>
-                                    {status.sources.map((s, i) => (
-                                        <span key={i} className="source-tag">{s.type === 'url' ? '🌐' : '📄'} {s.title}</span>
-                                    ))}
-                                </div>
-                            )}
-
-                            {toast && <div className={`drawer-toast ${toast.type}`}>{toast.text}</div>}
-                        </div>
-                    </div>
-                )}
-            </main>
+            {showSettings && (
+                <SettingsModal
+                    settings={settings}
+                    setSettings={setSettings}
+                    onClose={() => setShowSettings(false)}
+                />
+            )}
         </div>
     )
 }
+// export default App // Not needed, exported default at definition

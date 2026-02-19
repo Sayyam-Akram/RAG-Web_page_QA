@@ -1,148 +1,90 @@
-import { useState, useRef } from 'react'
+import React from 'react'
+import { LayoutDashboard, MessageSquare, MessageSquarePlus, Trash2, Settings, PlusCircle, Database } from 'lucide-react'
 
-export default function Sidebar({ status, onProcess, loading }) {
-    const [mode, setMode] = useState('url')
-    const [urls, setUrls] = useState('')
-    const [files, setFiles] = useState([])
-    const [message, setMessage] = useState(null)
-    const fileRef = useRef()
-
-    const handleFileChange = (e) => {
-        const selected = Array.from(e.target.files)
-        setFiles(prev => [...prev, ...selected])
-    }
-
-    const removeFile = (idx) => {
-        setFiles(prev => prev.filter((_, i) => i !== idx))
-    }
-
-    const handleProcess = async () => {
-        setMessage(null)
-        try {
-            if (mode === 'url') {
-                if (!urls.trim()) { setMessage({ type: 'error', text: 'Enter at least one URL.' }); return }
-                const res = await fetch('/api/load-urls', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ urls }),
-                })
-                const data = await res.json()
-                if (data.ok) {
-                    setMessage({ type: 'success', text: `Loaded ${data.loaded} chunks!` })
-                    onProcess(data.sources || [])
-                } else {
-                    setMessage({ type: 'error', text: data.errors?.join(', ') || 'Failed to load URLs.' })
-                }
-            } else {
-                if (files.length === 0) { setMessage({ type: 'error', text: 'Upload at least one file.' }); return }
-                const form = new FormData()
-                files.forEach(f => form.append('files', f))
-                const res = await fetch('/api/upload-files', { method: 'POST', body: form })
-                const data = await res.json()
-                if (data.ok) {
-                    setMessage({ type: 'success', text: `Loaded ${data.loaded} chunks!` })
-                    setFiles([])
-                    onProcess(data.sources || [])
-                } else {
-                    setMessage({ type: 'error', text: data.errors?.join(', ') || 'Failed to load files.' })
-                }
-            }
-        } catch (err) {
-            setMessage({ type: 'error', text: 'Connection error. Is the backend running?' })
-        }
-    }
-
-    const handleClear = async () => {
-        await fetch('/api/clear', { method: 'POST' })
-        onProcess([])
-        setMessage(null)
-    }
-
+export default function Sidebar({
+    currentView, setCurrentView,
+    threads, activeThread,
+    onLoadThread, onDeleteThread, onNewChat,
+    onToggleSources, onOpenSettings
+}) {
     return (
         <aside className="sidebar">
             <div className="sidebar-header">
-                <h1>📖 RAG Q&A</h1>
-                <p>Document-grounded answers with citations</p>
+                <div className="logo-wrap">
+                    <img src="/logo.png" alt="Logo" className="logo-img" onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
+                    <div className="logo-fallback" style={{ display: 'none' }}>⚡</div>
+                </div>
+                <div className="brand-text">
+                    <span className="brand">CiteFlow</span>
+                    <span className="brand-sub">Research OS</span>
+                </div>
             </div>
 
-            {/* Mode toggle */}
-            <div className="sidebar-section">
-                <h3>Data Source</h3>
-                <div className="mode-toggle">
-                    <button className={`mode-btn ${mode === 'url' ? 'active' : ''}`} onClick={() => setMode('url')}>
-                        🌐 URLs
-                    </button>
-                    <button className={`mode-btn ${mode === 'file' ? 'active' : ''}`} onClick={() => setMode('file')}>
-                        📄 Files
-                    </button>
-                </div>
-
-                <div className="input-area">
-                    {mode === 'url' ? (
-                        <textarea
-                            className="url-input"
-                            placeholder={'Paste URLs, one per line:\nhttps://docs.python.org/3/faq/general.html'}
-                            value={urls}
-                            onChange={e => setUrls(e.target.value)}
-                        />
-                    ) : (
-                        <>
-                            <div className="file-upload-zone" onClick={() => fileRef.current?.click()}>
-                                <input ref={fileRef} type="file" multiple accept=".pdf,.docx,.txt" onChange={handleFileChange} />
-                                <div className="icon">📁</div>
-                                <p>Click to upload files</p>
-                                <div className="formats">PDF, DOCX, TXT</div>
-                            </div>
-                            {files.length > 0 && (
-                                <div className="file-list">
-                                    {files.map((f, i) => (
-                                        <div key={i} className="file-item">
-                                            <span>📄</span>
-                                            <span className="name">{f.name}</span>
-                                            <button className="remove" onClick={() => removeFile(i)}>×</button>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </>
-                    )}
-                </div>
-
-                <button className="process-btn" onClick={handleProcess} disabled={loading}>
-                    {loading ? '⏳ Processing...' : '🚀 Process Source'}
+            <div className="nav-menu" style={{ padding: '0 0.7rem', marginBottom: '1rem' }}>
+                <button
+                    className={`nav-item ${currentView === 'dashboard' ? 'active' : ''}`}
+                    onClick={() => setCurrentView('dashboard')}
+                    style={{
+                        width: '100%', display: 'flex', alignItems: 'center', gap: '0.6rem',
+                        padding: '0.6rem', border: 'none', background: currentView === 'dashboard' ? 'var(--bg-elevated)' : 'transparent',
+                        color: currentView === 'dashboard' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        borderRadius: '8px', cursor: 'pointer', fontWeight: 500, fontSize: '0.9rem',
+                        transition: 'all 0.2s'
+                    }}
+                >
+                    <LayoutDashboard size={18} /> Dashboard
                 </button>
-
-                {message && <div className={`toast ${message.type}`}>{message.text}</div>}
+                <button
+                    className={`nav-item ${currentView === 'chat' ? 'active' : ''}`}
+                    onClick={() => setCurrentView('chat')}
+                    style={{
+                        width: '100%', display: 'flex', alignItems: 'center', gap: '0.6rem',
+                        padding: '0.6rem', border: 'none', background: currentView === 'chat' ? 'var(--bg-elevated)' : 'transparent',
+                        color: currentView === 'chat' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        borderRadius: '8px', cursor: 'pointer', fontWeight: 500, fontSize: '0.9rem',
+                        marginTop: '0.2rem', transition: 'all 0.2s'
+                    }}
+                >
+                    <MessageSquare size={18} /> Chat
+                </button>
             </div>
 
-            {/* Status */}
-            <div className="sidebar-section">
-                <h3>Status</h3>
-                {status.ready ? (
-                    <div className="status-pill ready"><span className="dot" /> Ready to Answer</div>
-                ) : (
-                    <div className="status-pill waiting"><span className="dot" /> Waiting for Data</div>
-                )}
-                {status.sources?.length > 0 && (
-                    <>
-                        <h3 style={{ marginTop: '1rem' }}>Loaded Sources</h3>
-                        <div className="source-list">
-                            {status.sources.map((s, i) => (
-                                <span key={i} className="source-badge">
-                                    {s.type === 'url' ? '🌐' : '📄'} {s.title}
-                                </span>
-                            ))}
+            <button className="new-chat-btn" onClick={onNewChat}>
+                <MessageSquarePlus size={16} /> New Thread
+            </button>
+
+            <div className="thread-section-label">Recent Research</div>
+            <div className="thread-list">
+                {threads.map(t => (
+                    <div key={t.id} className={`thread-item ${activeThread === t.id ? 'active' : ''}`} onClick={() => { setCurrentView('chat'); onLoadThread(t.id) }}>
+                        <div className="thread-dot" />
+                        <div className="thread-info">
+                            <div className="thread-title">{t.title}</div>
                         </div>
-                    </>
-                )}
+                        <button className="thread-delete" onClick={e => { e.stopPropagation(); onDeleteThread(t.id, e) }}>
+                            <Trash2 size={13} />
+                        </button>
+                    </div>
+                ))}
+                {threads.length === 0 && <div className="empty-threads" style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>No threads yet</div>}
             </div>
 
-            {/* Clear */}
-            {status.ready && (
-                <div className="sidebar-section">
-                    <button className="clear-btn" onClick={handleClear}>🗑️ Clear Knowledge Base</button>
+            <div className="sidebar-footer">
+                <button className="sidebar-footer-btn" onClick={onToggleSources}>
+                    <Database size={16} /> Source Manager
+                </button>
+                <button className="sidebar-footer-btn" onClick={onOpenSettings}>
+                    <Settings size={16} /> Settings
+                </button>
+                <div className="user-profile">
+                    <img src="/user-avatar.png" alt="User" className="user-avatar-img" onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
+                    <div className="user-avatar-fallback" style={{ display: 'none' }}>👤</div>
+                    <div className="user-info">
+                        <div className="user-name">Sayyam Akram</div>
+                        <div className="user-plan">Pro Plan</div>
+                    </div>
                 </div>
-            )}
+            </div>
         </aside>
     )
 }

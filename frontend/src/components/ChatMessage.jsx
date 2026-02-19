@@ -6,7 +6,19 @@ export default function ChatMessage({ msg }) {
     return (
         <div className={`msg-row ${role}`}>
             <div className="msg-inner">
-                <div className="msg-avatar">{role === 'user' ? '👤' : '🔬'}</div>
+                <div className={`msg-avatar ${role}-avatar`}>
+                    {role === 'user' ? (
+                        <>
+                            <img src="/user-avatar.png" alt="You" onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
+                            <span style={{ display: 'none' }}>👤</span>
+                        </>
+                    ) : (
+                        <>
+                            <img src="/bot-avatar.png" alt="Bot" onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
+                            <span style={{ display: 'none' }}>🔬</span>
+                        </>
+                    )}
+                </div>
                 <div className="msg-body">
                     <div className="msg-role">{role === 'user' ? 'You' : 'Assistant'}</div>
                     <div className="msg-text">

@@ -4,9 +4,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- LLM (Google Gemini) ---
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-MODEL = os.getenv("MODEL", "gemini-1.5-flash")
+# --- LLM (OpenRouter) ---
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+# Default to a FREE model
+MODEL = os.getenv("MODEL", "google/gemini-2.0-flash-exp:free") 
+BASE_URL = "https://openrouter.ai/api/v1"
 
 # --- Embeddings ---
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"

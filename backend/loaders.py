@@ -32,7 +32,12 @@ def load_from_urls(urls_text: str) -> tuple[list, list[str]]:
             errors.append(f"Invalid URL: {url}")
             continue
         try:
-            loader = WebBaseLoader(url)
+            loader = WebBaseLoader(
+                url,
+                header_template={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }
+            )
             loaded = loader.load()
             for d in loaded:
                 d.metadata["title"] = _extract_title(d)
