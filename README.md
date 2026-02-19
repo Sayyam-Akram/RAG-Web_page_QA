@@ -20,32 +20,7 @@ All built on a local-first stack using Docker, FastAPI, and React.
 *   **Modern Research UI:** Features a dual-view interface (Dashboard & Chat), Light/Dark themes, and a responsive Sidebar for managing research threads.
 *   **Advanced Controls:** User-configurable retrieval parameters (Top-K, Temperature) via a sleek settings modal.
 
-## Architecture
 
-```mermaid
-graph TD
-    User([User]) -->|Query| Frontend[React Frontend]
-    Frontend -->|Uncertainty Estimation| API{FastAPI Backend}
-    
-    subgraph "Knowledge Pipeline"
-        API -->|1. Hybrid Retrieval| Retriever[Ensemble Retriever]
-        Retriever -->|Semantic| VS[("ChromaDB - Vector")]
-        Retriever -->|Keyword| BM25[("BM25 - Sparse")]
-        VS -- Top 20 --> Fusion[Reciprocal Rank Fusion]
-        BM25 -- Top 20 --> Fusion
-    end
-    
-    subgraph "Cognitive Layer"
-        Fusion -- Candidates --> Ranker[FlashRank Cross-Encoder]
-        Ranker -- Top 5 Relevant --> LLM["LLM (OpenRouter)"]
-        LLM -->|Contextual Answer| API
-    end
-    
-    subgraph "Infrastructure"
-        Docker[Docker Compose] --> API
-        Docker --> Frontend
-    end
-```
 
 ## Tech Stack
 
