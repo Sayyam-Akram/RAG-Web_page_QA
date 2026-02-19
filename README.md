@@ -29,15 +29,15 @@ graph TD
     
     subgraph "Knowledge Pipeline"
         API -->|1. Hybrid Retrieval| Retriever[Ensemble Retriever]
-        Retriever -->|Semantic| VS[(ChromaDB - Vector)]
-        Retriever -->|Keyword| BM25[(BM25 - Sparse)]
+        Retriever -->|Semantic| VS[("ChromaDB - Vector")]
+        Retriever -->|Keyword| BM25[("BM25 - Sparse")]
         VS -- Top 20 --> Fusion[Reciprocal Rank Fusion]
         BM25 -- Top 20 --> Fusion
     end
     
     subgraph "Cognitive Layer"
         Fusion -- Candidates --> Ranker[FlashRank Cross-Encoder]
-        Ranker -- Top 5 Relevant --> LLM[LLM (OpenRouter)]
+        Ranker -- Top 5 Relevant --> LLM["LLM (OpenRouter)"]
         LLM -->|Contextual Answer| API
     end
     
